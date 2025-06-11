@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from prophet import Prophet
 from cleaning_data import clean_and_merge_transaksi
+import numpy as np
 
 st.set_page_config(page_title="📊 Dashboard Donasi", layout="wide")
 st.title("📊 Dashboard Transaksi Donasi Campaign SobatBerbagi.com")
@@ -60,8 +61,8 @@ def get_indonesian_month_order():
 
 @st.cache_data
 def load_data():
-    df_qris = pd.read_excel("data/transaksi_qris.xlsx", skiprows=1)
-    df_manual = pd.read_excel("data/transaksi_manual.xlsx", skiprows=1)
+    df_qris = pd.read_excel("D:\\KP\\sobatberbagi.com_dashboard\\data\\transaksi_qris.xlsx", skiprows=1)
+    df_manual = pd.read_excel("D:\\KP\\sobatberbagi.com_dashboard\\data\\transaksi_manual.xlsx", skiprows=1)
     df = clean_and_merge_transaksi(df_qris, df_manual)
     
     # Tambahkan kolom hari dan bulan dalam Bahasa Indonesia
@@ -232,6 +233,34 @@ with tabs[0]:
     st.info(f"🧠 Sebagian besar donatur lebih suka menggunakan **{top_pref['Metode Pembayaran']}** dalam donasi mereka. Hal ini menunjukkan kecenderungan preferensi pengguna terhadap metode ini.")
 
 # ==============================================================================
+    st.subheader("⚖️ Perbandingan Total Donasi QRIS vs Manual")
+
+    # Hitung total donasi per metode pembayaran (hanya QRIS & Manual)
+    donasi_per_metode = (
+        df_filtered[df_filtered["metode_pembayaran"].str.lower().isin(["qris", "manual"])]
+        .groupby("metode_pembayaran")["total_donasi"]
+        .sum()
+        .reset_index()
+    )
+    donasi_per_metode.columns = ["Metode Pembayaran", "Total Donasi"]
+
+    # Pie Chart
+    fig_donasi_pie = px.pie(
+        donasi_per_metode,
+        names="Metode Pembayaran",
+        values="Total Donasi",
+        title="Proporsi Total Donasi QRIS vs Manual",
+        hole=0.4,  # Donut chart
+        color_discrete_sequence=px.colors.qualitative.Set2
+    )
+    st.plotly_chart(fig_donasi_pie, use_container_width=True)
+
+    # Narasi otomatis
+    if not donasi_per_metode.empty:
+        top_donasi = donasi_per_metode.sort_values("Total Donasi", ascending=False).iloc[0]
+        st.info(f"💡 Metode dengan total donasi terbesar adalah **{top_donasi['Metode Pembayaran']}** sebesar **{format_rupiah(top_donasi['Total Donasi'])}**.")
+
+# ==============================================================================
     st.download_button("📥 Export Laporan", export_csv(df_filtered), "transaksi_harian.csv", "text/csv")
     st.subheader("📄 Tabel Data Transaksi")
     st.dataframe(df_filtered)
@@ -383,31 +412,37 @@ with tabs[6]:
         # Siapkan data untuk Prophet
         pred_data = df_filtered.groupby("tanggal_jam")["total_donasi"].sum().reset_index()
         pred_data = pred_data.rename(columns={"tanggal_jam": "ds", "total_donasi": "y"})
-
-        # Tentukan batas maksimum (cap) dari data historis + margin 20%
+        
+        # Quick data cleaning
+        pred_data = pred_data.sort_values('ds').reset_index(drop=True)
+        Q1, Q3 = pred_data['y'].quantile([0.25, 0.75])
+        IQR = Q3 - Q1
+        pred_data['y'] = np.clip(pred_data['y'], Q1 - 1.5*IQR, Q3 + 1.5*IQR)
+        
+        # Tentukan cap
         max_cap = pred_data["y"].max() * 1.2
         pred_data["cap"] = max_cap
-
-        # Inisialisasi model Prophet dengan growth logistik
-        model = Prophet(growth="logistic")
+        
+        # Model untuk prediksi final (full data)
+        model = Prophet(
+            growth="logistic",
+            changepoint_prior_scale=0.05,
+            seasonality_prior_scale=10.0
+        )
         model.fit(pred_data)
-
-        # Buat data future dan tambahkan cap juga
+        
+        # Buat prediksi
         future = model.make_future_dataframe(periods=30)
         future["cap"] = max_cap
-
-        # Prediksi
         forecast = model.predict(future)
-
+        
         # Rename kolom hasil prediksi
         forecast_renamed = forecast.rename(columns={
             "ds": "tanggal_jam",
             "yhat": "total_donasi"
         })
-
-        # Hindari nilai negatif
         forecast_renamed["total_donasi"] = forecast_renamed["total_donasi"].clip(lower=0)
-
+        
         # Visualisasi prediksi
         fig = px.line(
             forecast_renamed,
@@ -415,25 +450,29 @@ with tabs[6]:
             y="total_donasi",
             title="📈 Prediksi Donasi Harian (30 Hari ke Depan)"
         )
-        fig.add_hline(y=0, line_dash="dot", line_color="red")  # Garis nol untuk referensi
+        fig.add_hline(y=0, line_dash="dot", line_color="red")
         st.plotly_chart(fig)
-
-        # Estimasi total donasi 30 hari ke depan
-        est = forecast_renamed["total_donasi"].iloc[-30:].sum()
-        st.success(f"📅 Estimasi total donasi 30 hari ke depan: **{format_rupiah(est)}**")
-
-        # Analisis musiman dengan nama bulan dalam Bahasa Indonesia
+        
+        # Estimasi dengan range
+        future_pred = forecast_renamed["total_donasi"].iloc[-30:]
+        est_total = future_pred.sum()
+        est_lower = forecast["yhat_lower"].iloc[-30:].sum()
+        est_upper = forecast["yhat_upper"].iloc[-30:].sum()
+        
+        st.success(f"📅 Estimasi total donasi 30 hari: **{format_rupiah(est_total)}**")
+        st.info(f"📊 Range: **{format_rupiah(max(0, est_lower))}** - **{format_rupiah(est_upper)}**")
+        
+        # Analisis musiman
         forecast_renamed["bulan_num"] = forecast_renamed["tanggal_jam"].dt.month
         per_month = forecast_renamed.groupby("bulan_num")["total_donasi"].mean()
         
-        # Konversi nomor bulan ke nama bulan Indonesia
         month_names = {1: 'Januari', 2: 'Februari', 3: 'Maret', 4: 'April', 5: 'Mei', 6: 'Juni',
                     7: 'Juli', 8: 'Agustus', 9: 'September', 10: 'Oktober', 11: 'November', 12: 'Desember'}
         
-        max_month = month_names[per_month.idxmax()]
-        min_month = month_names[per_month.idxmin()]
+        if len(per_month) > 1:
+            max_month = month_names[per_month.idxmax()]
+            min_month = month_names[per_month.idxmin()]
+            st.info(f"📈 Lonjakan kemungkinan terjadi di bulan **{max_month}**")
+            st.error(f"📉 Penurunan kemungkinan terjadi di bulan **{min_month}**")
         
-        st.info(f"📈 Lonjakan kemungkinan terjadi di bulan **{max_month}**")
-        st.error(f"📉 Penurunan kemungkinan terjadi di bulan **{min_month}**")
-
-        st.caption("🔍 Prediksi ini mempertimbangkan tren historis. Evaluasi dengan kalender event internal seperti Ramadhan atau Idul Fitri untuk akurasi strategi.")
+            st.caption("🔍 Prediksi ini mempertimbangkan tren historis. Evaluasi dengan kalender event internal seperti Ramadhan atau Idul Fitri untuk akurasi strategi.")
