@@ -86,6 +86,7 @@ def clean_and_merge_transaksi(df_qris, df_manual):
         "nama_campaign", "nama_donatur", "total_donasi", "metode_pembayaran", "status"
     ]] 
 
+
 # Panggil load_data() dari file import_data.py
 df_qris, df_manual = load_data() 
 
