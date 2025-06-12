@@ -27,7 +27,7 @@ def clean_and_merge_transaksi(df_qris, df_manual):
 
     # Konversi ke datetime
     df_transaksi["tanggal_jam"] = pd.to_datetime(df_transaksi["tanggal_jam"], format="%d %m %Y %H:%M")
-    
+
     # Buat kolom tanggal (hanya tanggal tanpa jam)
     df_transaksi["tanggal"] = df_transaksi["tanggal_jam"].dt.date
     
@@ -67,7 +67,7 @@ def clean_and_merge_transaksi(df_qris, df_manual):
 
     # Tambahan kolom untuk agregasi
     df_transaksi["tahun"] = df_transaksi["tanggal_jam"].dt.year
-    df_transaksi["bulan"] = df_transaksi["tanggal_jam"].dt.strftime("%Y-%m")
+    df_transaksi["bulan"] = df_transaksi["tanggal_jam"].dt.month
     df_transaksi["minggu"] = df_transaksi["tanggal_jam"].dt.isocalendar().week
     df_transaksi["hari"] = df_transaksi["tanggal_jam"].dt.day_name()
     df_transaksi["jam"] = df_transaksi["tanggal_jam"].dt.hour
