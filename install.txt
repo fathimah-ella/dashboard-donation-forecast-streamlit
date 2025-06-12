@@ -1,7 +1,6 @@
 pip install pandas openpyxl mysql-connector-python
 
 pip install streamlit
-pip install prophet
 pip install altair prophet
 pip install plotly
 
